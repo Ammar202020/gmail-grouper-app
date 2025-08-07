@@ -6,6 +6,8 @@
     <title>Gmail Subject Grouper</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Your custom CSS goes here, within its own <style> tags -->
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -43,6 +45,10 @@
             to { transform: rotate(360deg); }
         }
     </style>
+
+    <!-- REQUIRED: Google API scripts go here, directly in <head> -->
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
     <div class="container bg-white shadow-lg rounded-lg p-6 md:p-8 w-full">
@@ -76,7 +82,7 @@
         </div>
     </div>
 
-    <script src="https://apis.google.com/js/api.js"></script>
+    <!-- Your main JavaScript logic goes here, within its own <script> tags at the end of <body> -->
     <script>
         // Your API key will be automatically provided by the Canvas environment.
         // DO NOT replace this with your actual API key.
@@ -352,7 +358,7 @@
             client_id: CLIENT_ID,
             callback: gisLoaded // This is just for initializing tokenClient, not direct sign-in
         });
-        google.accounts.id.prompt(); // Also for initializing, not direct sign-in
+        // Removed: google.accounts.id.prompt(); // This line was removed
 
     </script>
 </body>
