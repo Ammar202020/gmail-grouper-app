@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Subject Grouper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #374151;
+        }
+        .container {
+            max-width: 960px;
+        }
+        .email-group-header {
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .email-group-header:hover {
+            background-color: #e5e7eb;
+        }
+        .email-group-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .email-group-content.expanded {
+            max-height: 1000px; /* Arbitrary large value, adjust as needed */
+            transition: max-height 0.5s ease-in;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #4f46e5;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="container bg-white shadow-lg rounded-lg p-6 md:p-8 w-full">
+        <h1 class="text-3xl font-bold text-center text-indigo-700 mb-6">Gmail Subject Grouper</h1>
+
+        <div id="auth-section" class="flex flex-col items-center justify-center space-y-4">
+            <p class="text-gray-600 text-center">Sign in with your Google account to view your inbox grouped by subject.</p>
+            <button id="authorize_button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out">
+                Sign In with Google
+            </button>
+        </div>
+
+        <div id="app-section" class="hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-semibold text-gray-800">Your Grouped Inbox</h2>
+                <button id="signout_button" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm transition duration-300 ease-in-out">
+                    Sign Out
+                </button>
+            </div>
+
+            <div id="loading-indicator" class="flex justify-center items-center py-8 hidden">
+                <div class="spinner mr-3"></div>
+                <p class="text-indigo-600">Loading emails...</p>
+            </div>
+
+            <div id="email-list" class="space-y-4">
+                <!-- Emails will be loaded here -->
+            </div>
+
+            <div id="error-message" class="text-red-600 text-center mt-4 hidden"></div>
+        </div>
+    </div>
+
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script>
+        // Your API key will be automatically provided by the Canvas environment.
+        // DO NOT replace this with your actual API key.
+        const API_KEY = ""; 
+        const CLIENT_ID = '601991078968-esfid91ievs3vstd0kah89id7oi591nm.apps.googleusercontent.com'; // Replaced with your actual OAuth 2.0 Client ID
+        const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest"];
+        const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
+
+        let gapiInited = false;
+        let gisInited = false;
+        let tokenClient;
+
+        const authSection = document.getElementById('auth-section');
+        const appSection = document.getElementById('app-section');
+        const authorizeButton = document.getElementById('authorize_button');
+        const signoutButton = document.getElementById('signout_button');
+        const emailListDiv = document.getElementById('email-list');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const errorMessageDiv = document.getElementById('error-message');
+
+        /**
+         * Callback after api.js is loaded.
+         */
+        function gapiLoaded() {
+            gapi.load('client', initializeGapiClient);
+        }
+
+        /**
+         * Callback after the API client is loaded. Loads the
+         * discovery doc to initialize the API.
+         */
+        async function initializeGapiClient() {
+            await gapi.client.init({
+                apiKey: API_KEY,
+                discoveryDocs: DISCOVERY_DOCS,
+            });
+            gapiInited = true;
+            maybeEnableButtons();
+        }
+
+        /**
+         * Callback after Google Identity Services client library is loaded.
+         */
+        function gisLoaded() {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                callback: '', // Defined at request time in await call
+            });
+            gisInited = true;
+            maybeEnableButtons();
+        }
+
+        /**
+         * Enables user interaction after both gapi and gis are loaded.
+         */
+        function maybeEnableButtons() {
+            if (gapiInited && gisInited) {
+                authorizeButton.onclick = handleAuthClick;
+                signoutButton.onclick = handleSignoutClick;
+                // Check if already signed in from a previous session (though not persistent in this simple example)
+                // For a real app, you'd check a stored token.
+                // For this example, we'll just show auth section initially.
+            }
+        }
+
+        /**
+         * Sign in the user upon button click.
+         */
+        async function handleAuthClick() {
+            tokenClient.callback = async (resp) => {
+                if (resp.error !== 'popup_closed_by_user') {
+                    // Handle the access token here
+                    if (resp.access_token) {
+                        gapi.client.setToken(resp);
+                        authSection.classList.add('hidden');
+                        appSection.classList.remove('hidden');
+                        await listMessages();
+                    } else {
+                        displayError('Failed to get access token. Please try again.');
+                    }
+                }
+            };
+
+            if (gapi.client.getToken() === null) {
+                // Prompt the user to select a Google account and authorize your app.
+                tokenClient.requestAccessToken({prompt: 'consent'});
+            } else {
+                // If a token already exists (e.g., from a previous session in a more complex app),
+                // you can directly proceed or refresh it. For this simple app, we'll re-request.
+                tokenClient.requestAccessToken({prompt: 'consent'});
+            }
+        }
+
+        /**
+         * Sign out the user upon button click.
+         */
+        function handleSignoutClick() {
+            const token = gapi.client.getToken();
+            if (token !== null) {
+                google.accounts.oauth2.revoke(token.access_token);
+                gapi.client.setToken(null);
+                authSection.classList.remove('hidden');
+                appSection.classList.add('hidden');
+                emailListDiv.innerHTML = ''; // Clear emails
+                errorMessageDiv.classList.add('hidden'); // Clear errors
+            }
+        }
+
+        /**
+         * Lists the messages in the user's Gmail inbox and groups them by subject.
+         */
+        async function listMessages() {
+            loadingIndicator.classList.remove('hidden');
+            emailListDiv.innerHTML = '';
+            errorMessageDiv.classList.add('hidden');
+
+            try {
+                // Fetch message IDs from the inbox
+                const response = await gapi.client.gmail.users.messages.list({
+                    'userId': 'me',
+                    'labelIds': ['INBOX'],
+                    'maxResults': 50 // Fetch a reasonable number of recent emails
+                });
+
+                const messages = response.result.messages;
+                if (!messages || messages.length === 0) {
+                    emailListDiv.innerHTML = '<p class="text-center text-gray-500">No messages found in your inbox.</p>';
+                    loadingIndicator.classList.add('hidden');
+                    return;
+                }
+
+                const groupedEmails = new Map(); // Using Map to preserve insertion order for subjects
+
+                // Fetch full details for each message
+                for (const message of messages) {
+                    try {
+                        const msgResponse = await gapi.client.gmail.users.messages.get({
+                            'userId': 'me',
+                            'id': message.id,
+                            'format': 'full'
+                        });
+
+                        const headers = msgResponse.result.payload.headers;
+                        const subjectHeader = headers.find(header => header.name === 'Subject');
+                        const fromHeader = headers.find(header => header.name === 'From');
+                        const dateHeader = headers.find(header => header.name === 'Date');
+
+                        const subject = subjectHeader ? subjectHeader.value : '(No Subject)';
+                        const from = fromHeader ? fromHeader.value : 'Unknown Sender';
+                        const date = dateHeader ? new Date(dateHeader.value).toLocaleString() : 'Unknown Date';
+                        const snippet = msgResponse.result.snippet || 'No snippet available.';
+
+                        // Normalize the subject for grouping
+                        const normalizedSubject = normalizeSubject(subject);
+
+                        if (!groupedEmails.has(normalizedSubject)) {
+                            groupedEmails.set(normalizedSubject, {
+                                originalSubject: subject,
+                                emails: []
+                            });
+                        }
+                        groupedEmails.get(normalizedSubject).emails.push({
+                            id: message.id,
+                            subject: subject,
+                            from: from,
+                            date: date,
+                            snippet: snippet
+                        });
+
+                    } catch (detailError) {
+                        console.error('Error fetching message details:', detailError);
+                        // Continue to next message even if one fails
+                    }
+                }
+
+                displayGroupedEmails(groupedEmails);
+
+            } catch (error) {
+                console.error('Error listing messages:', error);
+                displayError('Failed to load emails. Please check your connection or try again.');
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Normalizes a subject string for grouping (removes "Re:", "Fwd:", etc.).
+         * @param {string} subject The original email subject.
+         * @returns {string} The normalized subject.
+         */
+        function normalizeSubject(subject) {
+            // Remove common prefixes like "Re:", "Fwd:", "FW:", case-insensitive
+            let normalized = subject.replace(/^(Re|Fwd|FW):\s*/i, '');
+            // Remove multiple spaces and trim
+            normalized = normalized.replace(/\s+/g, ' ').trim();
+            return normalized;
+        }
+
+        /**
+         * Displays the grouped emails in the UI.
+         * @param {Map<string, {originalSubject: string, emails: Array<Object>}>} groupedEmails Map of normalized subjects to email groups.
+         */
+        function displayGroupedEmails(groupedEmails) {
+            emailListDiv.innerHTML = ''; // Clear previous content
+
+            if (groupedEmails.size === 0) {
+                emailListDiv.innerHTML = '<p class="text-center text-gray-500">No emails to display after grouping.</p>';
+                return;
+            }
+
+            // Sort groups by the date of the most recent email within the group
+            const sortedGroups = Array.from(groupedEmails.entries()).sort(([, a], [, b]) => {
+                const latestA = new Date(a.emails[0].date); // Assuming emails are already somewhat ordered by API
+                const latestB = new Date(b.emails[0].date);
+                return latestB.getTime() - latestA.getTime();
+            });
+
+            sortedGroups.forEach(([normalizedSubject, group]) => {
+                const groupContainer = document.createElement('div');
+                groupContainer.className = 'bg-gray-50 rounded-lg shadow-sm overflow-hidden border border-gray-200';
+
+                const header = document.createElement('div');
+                header.className = 'email-group-header p-4 bg-gray-100 flex justify-between items-center rounded-t-lg';
+                header.innerHTML = `
+                    <h3 class="text-lg font-medium text-gray-800 truncate">${group.originalSubject} (${group.emails.length})</h3>
+                    <span class="text-gray-500 text-sm transform transition-transform duration-300 ease-in-out">&#9660;</span> <!-- Down arrow -->
+                `;
+                groupContainer.appendChild(header);
+
+                const content = document.createElement('div');
+                content.className = 'email-group-content'; // Initially collapsed
+
+                group.emails.forEach(email => {
+                    const emailItem = document.createElement('div');
+                    emailItem.className = 'border-t border-gray-200 p-4 bg-white';
+                    emailItem.innerHTML = `
+                        <p class="text-sm font-semibold text-indigo-700">${email.from}</p>
+                        <p class="text-xs text-gray-500">${email.date}</p>
+                        <p class="text-sm text-gray-700 mt-1 line-clamp-2">${email.snippet}</p>
+                    `;
+                    content.appendChild(emailItem);
+                });
+
+                groupContainer.appendChild(content);
+                emailListDiv.appendChild(groupContainer);
+
+                // Toggle functionality
+                header.addEventListener('click', () => {
+                    content.classList.toggle('expanded');
+                    const arrow = header.querySelector('span');
+                    if (content.classList.contains('expanded')) {
+                        arrow.innerHTML = '&#9650;'; // Up arrow
+                    } else {
+                        arrow.innerHTML = '&#9660;'; // Down arrow
+                    }
+                });
+            });
+        }
+
+        /**
+         * Displays an error message to the user.
+         * @param {string} message The error message to display.
+         */
+        function displayError(message) {
+            errorMessageDiv.textContent = message;
+            errorMessageDiv.classList.remove('hidden');
+        }
+
+        // Load the Google API client library
+        gapi.load('client', gapiLoaded);
+        google.accounts.id.initialize({
+            client_id: CLIENT_ID,
+            callback: gisLoaded // This is just for initializing tokenClient, not direct sign-in
+        });
+        google.accounts.id.prompt(); // Also for initializing, not direct sign-in
+
+    </script>
+</body>
+</html>
